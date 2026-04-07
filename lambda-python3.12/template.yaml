@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Shipment ingestion pipeline - API Gateway -> Lambda -> DynamoDB
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  ShipmentsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+
+  ShipmentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: shipment-ingestion-records
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: shipment_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: shipment_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  ShipmentIngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: shipment-ingest-function
+      CodeUri: shipment_ingest/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ShipmentsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ShipmentsTable
+      Events:
+        CreateShipment:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ShipmentsApi
+            Path: /shipments
+            Method: POST
+
+Outputs:
+  ShipmentsApiUrl:
+    Description: POST endpoint for creating shipment records
+    Value: !Sub https://${ShipmentsApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/shipments
+
+  ShipmentsTableName:
+    Description: DynamoDB table name
+    Value: !Ref ShipmentsTable
