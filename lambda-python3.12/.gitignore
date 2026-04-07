@@ -238,9 +238,12 @@ $RECYCLE.BIN/
 .aws-sam/
 .sam-cache/
 
-# Local data files
 data/shipments.csv
 data/csv_report_20260326_131512.json
+
+# Local data files
+lambda-python3.12/data/shipments.csv
+lambda-python3.12/data/csv_report_20260326_131512.json
 
 # Windows shortcuts
 *.lnk
