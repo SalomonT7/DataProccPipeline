@@ -1,0 +1,14 @@
+{
+  "Records": [
+    {
+      "s3": {
+        "bucket": {
+          "name": "example-bucket"
+        },
+        "object": {
+          "key": "eia-gas-history/2026/04/pet_pri_gnd_dcus_nus_w.xls"
+        }
+      }
+    }
+  ]
+}

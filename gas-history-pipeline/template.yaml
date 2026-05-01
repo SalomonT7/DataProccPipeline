@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Monthly EIA gas history ingestion pipeline
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 60
+    MemorySize: 512
+
+Resources:
+  RawGasHistoryBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-rawgashis-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  RawGasHistoryBucketBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RawGasHistoryBucket
+      PolicyDocument:
+        Id: RequireEncryptionInTransit
+        Version: '2012-10-17'
+        Statement:
+          - Principal: '*'
+            Action: '*'
+            Effect: Deny
+            Resource:
+              - !GetAtt RawGasHistoryBucket.Arn
+              - !Sub ${RawGasHistoryBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  GasHistoryTrackingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dataset_name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dataset_name
+          KeyType: HASH
+
+  GasHistoryWeeklyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: week_date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: week_date
+          KeyType: HASH
+
+  FetchGasHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/fetch/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          TRACKING_TABLE_NAME: !Ref GasHistoryTrackingTable
+          RAW_BUCKET_NAME: !Ref RawGasHistoryBucket
+          DATASET_NAME: eia-gas-history
+          SOURCE_URL: https://www.eia.gov/dnav/pet/xls/PET_PRI_GND_DCUS_NUS_W.xls
+          RAW_PREFIX: eia-gas-history/
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3WritePolicy:
+            BucketName: !Sub ${AWS::StackName}-rawgashis-${AWS::AccountId}
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GasHistoryTrackingTable
+      Events:
+        MonthlyFetch:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 12 1 * ? *)
+            ScheduleExpressionTimezone: UTC
+            State: ENABLED
+            FlexibleTimeWindow:
+              Mode: 'OFF'
+
+  ProcessGasHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/process/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          GAS_HISTORY_TABLE_NAME: !Ref GasHistoryWeeklyTable
+          TARGET_SHEET_NAME: Data 1
+          TARGET_SOURCE_KEY: EMM_EPM0_PTE_NUS_DPG
+          SOURCE_NAME: EIA U.S. Gasoline and Diesel Retail Prices
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - S3ReadPolicy:
+            BucketName: !Sub ${AWS::StackName}-rawgashis-${AWS::AccountId}
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GasHistoryWeeklyTable
+      Events:
+        RawFileUploaded:
+          Type: S3
+          Properties:
+            Bucket: !Ref RawGasHistoryBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: eia-gas-history/
+                  - Name: suffix
+                    Value: .xls
+
+Outputs:
+  RawGasHistoryBucketName:
+    Description: Raw gas history S3 bucket name
+    Value: !Ref RawGasHistoryBucket
+
+  FetchGasHistoryFunctionArn:
+    Description: ARN of the monthly fetch Lambda
+    Value: !GetAtt FetchGasHistoryFunction.Arn
+
+  ProcessGasHistoryFunctionArn:
+    Description: ARN of the S3-triggered processing Lambda
+    Value: !GetAtt ProcessGasHistoryFunction.Arn
+
+  GasHistoryTrackingTableName:
+    Description: DynamoDB table for tracking source refresh state
+    Value: !Ref GasHistoryTrackingTable
+
+  GasHistoryWeeklyTableName:
+    Description: DynamoDB table for normalized weekly gas prices
+    Value: !Ref GasHistoryWeeklyTable
